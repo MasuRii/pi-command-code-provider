@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import type { Api, AssistantMessageEvent, Context, Model } from "@mariozechner/pi-ai";
+import type { Api, AssistantMessageEvent, Context, Model } from "@earendil-works/pi-ai";
 
 import { createCommandCodeStream } from "../src/command-code.ts";
 import { COMMAND_CODE_API, type ExtensionConfig } from "../src/config.ts";
@@ -35,6 +35,8 @@ const config: ExtensionConfig = {
   models: [],
 };
 
+const PI_TEST_SYSTEM_PROMPT = "You are the Pi coding agent.";
+
 async function collect(stream: AsyncIterable<AssistantMessageEvent>): Promise<AssistantMessageEvent[]> {
   const events: AssistantMessageEvent[] = [];
   for await (const event of stream) events.push(event);
@@ -56,6 +58,7 @@ test("rewrites CommandCode-native tool aliases to Pi tool names", async () => {
 
   try {
     const context: Context = {
+      systemPrompt: PI_TEST_SYSTEM_PROMPT,
       messages: [{ role: "user", content: "Use tools", timestamp: Date.now() }],
       tools: [
         { name: "read", description: "Read", parameters: { type: "object" } as never },
@@ -89,6 +92,7 @@ test("rewrites CommandCode glob tool aliases and filePattern grep arguments", as
 
   try {
     const context: Context = {
+      systemPrompt: PI_TEST_SYSTEM_PROMPT,
       messages: [{ role: "user", content: "Use tools", timestamp: Date.now() }],
       tools: [
         { name: "find", description: "Find", parameters: { type: "object" } as never },
@@ -145,11 +149,64 @@ test("sanitizes glob terminology from outbound prompt and tool descriptions", as
   }
 });
 
-test("sends native CommandCode stream request with tool schemas and emits text deltas", async () => {
+test("always sends a Pi-owned system prompt to suppress the CommandCode server default", async () => {
   const originalFetch = globalThis.fetch;
   let outboundBody: unknown;
   globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     outboundBody = JSON.parse(String(init?.body));
+    return new Response('{"type":"start"}\n{"type":"finish","finishReason":"stop"}\n', { status: 200, headers: { "content-type": "text/event-stream" } });
+  };
+
+  try {
+    const context: Context = {
+      systemPrompt: PI_TEST_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+    };
+    const logger = createTestLogger();
+    const stream = createCommandCodeStream(config, { cwd: process.cwd() }, logger)(model, context, { apiKey: "token" });
+    await collect(stream);
+    const request = outboundBody as { params: { system?: string } };
+
+    assert.match(request.params.system ?? "", /Pi coding agent/);
+    assert.doesNotMatch(request.params.system ?? "", /Command Code/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("surfaces nested CommandCode stream error messages", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (): Promise<Response> => {
+    return new Response(
+      '{"type":"start"}\n{"type":"error","error":{"type":"server_error","message":"Failed after 3 attempts. Last error: Too Many Requests"}}\n',
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
+  };
+
+  try {
+    const context: Context = {
+      systemPrompt: PI_TEST_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: "Say hello", timestamp: Date.now() }],
+    };
+    const logger = createTestLogger();
+    const stream = createCommandCodeStream(config, { cwd: process.cwd() }, logger)(model, context, { apiKey: "token" });
+    const events = await collect(stream);
+    const error = events.find((event) => event.type === "error");
+
+    assert.equal(error?.type, "error");
+    assert.match(error.error.errorMessage ?? "", /Too Many Requests/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("sends native CommandCode stream request with tool schemas and emits text deltas", async () => {
+  const originalFetch = globalThis.fetch;
+  let outboundBody: unknown;
+  let outboundHeaders: Headers;
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    outboundBody = JSON.parse(String(init?.body));
+    outboundHeaders = new Headers(init?.headers);
     return new Response(
       '{"type":"start"}\n{"type":"start-step","request":{"body":{}}}\n{"type":"text-start","id":"txt-0"}\n{"type":"text-delta","id":"txt-0","text":"Hel"}\n{"type":"text-delta","id":"txt-0","text":"lo"}\n{"type":"text-end","id":"txt-0"}\n{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":10,"outputTokens":2,"cachedInputTokens":3}}\n',
       { status: 200, headers: { "content-type": "text/event-stream" } },
@@ -165,8 +222,10 @@ test("sends native CommandCode stream request with tool schemas and emits text d
     const logger = createTestLogger();
     const stream = createCommandCodeStream(config, { cwd: process.cwd() }, logger)(model, context, { apiKey: "token" });
     const events = await collect(stream);
-    const request = outboundBody as { memory?: string; params: { stream?: boolean; model?: string; system?: string; tools?: Array<Record<string, unknown>>; messages?: Array<Record<string, unknown>> } };
+    const request = outboundBody as { memory?: string; mode?: string; params: { stream?: boolean; model?: string; system?: string; tools?: Array<Record<string, unknown>>; messages?: Array<Record<string, unknown>> } };
 
+    assert.equal(request.mode, "custom-agent");
+    assert.equal(outboundHeaders.get("x-cli-environment"), "production");
     assert.equal(request.params.stream, true);
     assert.equal(request.params.model, "test-model");
     assert.equal(request.params.tools?.[0].name, "read");
@@ -265,6 +324,7 @@ test("parses DeepSeek DSML tool calls emitted as text", async () => {
 
   try {
     const context: Context = {
+      systemPrompt: PI_TEST_SYSTEM_PROMPT,
       messages: [{ role: "user", content: "Use grep", timestamp: Date.now() }],
       tools: [{ name: "grep", description: "Search", parameters: { type: "object" } as never }],
     };
@@ -302,6 +362,7 @@ test("serializes Pi tool results into CommandCode native tool-result content blo
 
   try {
     const context: Context = {
+      systemPrompt: PI_TEST_SYSTEM_PROMPT,
       messages: [
         { role: "user", content: "Read package.json", timestamp: Date.now() },
         {
@@ -367,6 +428,7 @@ test("parses native CommandCode reasoning and tool-call content blocks", async (
 
   try {
     const context: Context = {
+      systemPrompt: PI_TEST_SYSTEM_PROMPT,
       messages: [{ role: "user", content: "Read package.json", timestamp: Date.now() }],
     };
     const logger = createTestLogger();

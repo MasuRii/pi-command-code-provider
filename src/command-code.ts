@@ -12,7 +12,7 @@ import {
   type Tool,
   type ToolCall,
   type Usage,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 
 import type { ExtensionConfig } from "./config.js";
 import type { DebugLogger } from "./debug-logger.js";
@@ -48,9 +48,11 @@ interface CommandCodeTool {
 }
 
 interface CommandCodeRequest {
+  config: Record<string, unknown>;
   memory: string;
   taste: null;
   skills: string;
+  mode: "custom-agent";
   params: {
     tools?: CommandCodeTool[];
     stream: true;
@@ -60,7 +62,6 @@ interface CommandCodeRequest {
     messages: CommandCodeMessage[];
     model: string;
   };
-  config: Record<string, unknown>;
 }
 
 interface CommandCodeResponse {
@@ -214,12 +215,14 @@ function buildTools(tools: Tool[] | undefined): CommandCodeTool[] | undefined {
   }));
 }
 
-function buildSystemPrompt(config: ExtensionConfig, context: Context): string | undefined {
-  const prompt = [config.memory, context.systemPrompt]
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .join("\n\n")
-    .trim();
-  return prompt.length > 0 ? sanitizeToolVocabulary(prompt) : undefined;
+function buildSystemPrompt(_config: ExtensionConfig, context: Context): string {
+  const prompt = typeof context.systemPrompt === "string" ? context.systemPrompt.trim() : "";
+  if (!prompt) {
+    throw new Error(
+      "Pi system prompt is required for CommandCode requests; refusing to let CommandCode inject its default system prompt.",
+    );
+  }
+  return sanitizeToolVocabulary(prompt);
 }
 
 function resolveMaxTokens(model: Model<Api>, options?: SimpleStreamOptions): number {
@@ -229,9 +232,11 @@ function resolveMaxTokens(model: Model<Api>, options?: SimpleStreamOptions): num
 
 function buildRequest(model: Model<Api>, context: Context, config: ExtensionConfig, runtime: CommandCodeRuntimeState, options?: SimpleStreamOptions): CommandCodeRequest {
   return {
+    config: buildCommandConfig(runtime),
     memory: "",
     taste: null,
     skills: "",
+    mode: "custom-agent",
     params: {
       tools: buildTools(context.tools),
       stream: true,
@@ -241,7 +246,6 @@ function buildRequest(model: Model<Api>, context: Context, config: ExtensionConf
       messages: buildMessages(context),
       model: model.id,
     },
-    config: buildCommandConfig(runtime),
   };
 }
 
@@ -259,6 +263,7 @@ function buildHeaders(config: ExtensionConfig, apiKey: string, options?: SimpleS
     ...(options?.headers ?? {}),
     "Content-Type": "application/json",
     Accept: "text/event-stream, application/json",
+    "x-cli-environment": "production",
     "X-Command-Code-Version": config.commandCodeVersion,
   };
   if (!headers.Authorization && !headers.authorization) {
@@ -707,6 +712,20 @@ function eventId(event: Record<string, unknown>): string {
   return typeof event.id === "string" ? event.id : "default";
 }
 
+function eventErrorMessage(event: Record<string, unknown>): string {
+  const directMessage = optionalString(event.message) ?? optionalString(event.error);
+  if (directMessage) return directMessage;
+
+  if (isRecord(event.error)) {
+    const nestedMessage = optionalString(event.error.message) ?? optionalString(event.error.error);
+    const nestedType = optionalString(event.error.type) ?? optionalString(event.error.code);
+    if (nestedMessage && nestedType) return `${nestedType}: ${nestedMessage}`;
+    if (nestedMessage) return nestedMessage;
+  }
+
+  return "CommandCode stream returned an error.";
+}
+
 async function consumeEventStream(response: Response, stream: AssistantMessageEventStream, output: AssistantMessage, model: Model<Api>, context: Context): Promise<void> {
   stream.push({ type: "start", partial: output });
   const textBlocks = new Map<string, number>();
@@ -809,7 +828,7 @@ async function consumeEventStream(response: Response, stream: AssistantMessageEv
 
     if (type === "error") {
       finalReason = "error";
-      finalError = optionalString(event.message) ?? optionalString(event.error) ?? "CommandCode stream returned an error.";
+      finalError = eventErrorMessage(event);
     }
   };
 

@@ -16,7 +16,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "check": "npm run build && npm run test"
   },
   "keywords": [
     "pi",
@@ -29,13 +30,13 @@
     "node": ">=20"
   },
   "peerDependencies": {
-    "@mariozechner/pi-ai": "^0.73.0",
-    "@mariozechner/pi-coding-agent": "^0.73.0"
+    "@earendil-works/pi-ai": "^0.75.4",
+    "@earendil-works/pi-coding-agent": "^0.75.4"
   },
   "devDependencies": {
-    "@mariozechner/pi-ai": "^0.73.0",
-    "@mariozechner/pi-coding-agent": "^0.73.0",
-    "@types/node": "^25.6.0",
-    "typescript": "^6.0.3"
+    "@types/node": "^25.9.1",
+    "typescript": "^6.0.3",
+    "@earendil-works/pi-ai": "^0.75.4",
+    "@earendil-works/pi-coding-agent": "^0.75.4"
   }
 }

@@ -1,7 +1,7 @@
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { createCommandCodeStream } from "./command-code.js";
 import { COMMAND_CODE_API, loadConfig } from "./config.js";

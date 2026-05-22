@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
-import type { ProviderModelConfig } from "@mariozechner/pi-coding-agent";
+import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 
 export const COMMAND_CODE_API = "command-code-alpha" as const;
 
